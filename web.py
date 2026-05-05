@@ -4,12 +4,10 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.colors as pcolors
+from io import StringIO
 
 st.set_page_config(page_title="考试成绩分析", layout="wide")
 st.title("📊 考试成绩分析工具 (by Licht)")
-
-# ---------- 文件上传与 Sheet 选择 ----------
-uploaded_file = st.file_uploader("上传 Excel 文件", type=["xlsx", "xls"])
 
 # ---------- 示例表格格式 ----------
 with st.expander("📋 查看示例数据格式"):
@@ -23,37 +21,77 @@ with st.expander("📋 查看示例数据格式"):
         "学科C": [120, 128, 138, 126, 127]
     })
     st.dataframe(example_data, use_container_width=True)
-    st.caption("上传的 Excel 文件需包含「班级」列以及各学科成绩列；「学校」列可选，若无则仅按班级分析。")
+    st.caption("上传的 Excel 文件或粘贴的数据需包含「班级」列以及各学科成绩列；「学校」列可选，若无则仅按班级分析。")
 
-if uploaded_file is not None:
-    try:
-        xls = pd.ExcelFile(uploaded_file)
-        sheet_names = xls.sheet_names
-    except Exception as e:
-        st.error(f"读取 Excel 文件失败：{e}")
-        st.stop()
+# ---------- 数据输入方式选择 ----------
+input_method = st.radio("选择数据输入方式", ["📁 上传 Excel 文件", "📋 粘贴表格数据"])
 
-    if not sheet_names:
-        st.error("文件中没有可用的 Sheet。")
-        st.stop()
+df_source = None
 
-    sheet = st.selectbox("选择要分析的 Sheet", sheet_names)
+if input_method == "📁 上传 Excel 文件":
+    uploaded_file = st.file_uploader("上传 Excel 文件", type=["xlsx", "xls"])
+    if uploaded_file is not None:
+        try:
+            xls = pd.ExcelFile(uploaded_file)
+            sheet_names = xls.sheet_names
+        except Exception as e:
+            st.error(f"读取 Excel 文件失败：{e}")
+            st.stop()
 
-    try:
-        df = pd.read_excel(uploaded_file, sheet_name=sheet, dtype=str)
-    except Exception as e:
-        st.error(f"读取 Sheet 失败：{e}")
-        st.stop()
+        if not sheet_names:
+            st.error("文件中没有可用的 Sheet。")
+            st.stop()
 
-    if df.empty:
-        st.error("所选 Sheet 为空。")
-        st.stop()
+        sheet = st.selectbox("选择要分析的 Sheet", sheet_names)
 
+        try:
+            df_source = pd.read_excel(uploaded_file, sheet_name=sheet, dtype=str)
+        except Exception as e:
+            st.error(f"读取 Sheet 失败：{e}")
+            st.stop()
+
+        # 校验基本条件
+        if df_source.empty:
+            st.error("所选 Sheet 为空。")
+            st.stop()
+elif input_method == "📋 粘贴表格数据":
+    st.markdown("请将表格数据（含列名）粘贴到下方文本框，支持从 Excel、网页等直接复制。")
+    pasted_text = st.text_area("粘贴数据", height=200, placeholder="学校\t班级\t姓名\t总分\t学科A\n学校A\t1班\t学生1\t386\t121")
+    sep_option = st.selectbox("分隔符", ["自动检测", "制表符（Tab）", "逗号（,）", "空格"])
+
+    if pasted_text:
+        # 解析分隔符
+        sep_map = {
+            "制表符（Tab）": "\t",
+            "逗号（,）": ",",
+            "空格": " ",
+            "自动检测": None,
+        }
+        sep = sep_map[sep_option]
+
+        try:
+            # 若自动检测，让 pandas 推断分隔符
+            if sep is None:
+                df_source = pd.read_csv(StringIO(pasted_text), sep=None, engine="python", dtype=str)
+            else:
+                df_source = pd.read_csv(StringIO(pasted_text), sep=sep, dtype=str)
+        except Exception as e:
+            st.error(f"解析粘贴数据失败，请检查格式和分隔符。错误信息：{e}")
+            st.stop()
+
+        if df_source.empty:
+            st.error("粘贴的数据为空，请重新输入。")
+            st.stop()
+
+# ---------- 如果数据已加载，执行后续分析 ----------
+if df_source is not None:
+    # 通用预处理
+    df = df_source.copy()
     df = df.loc[:, ~df.columns.duplicated()]
 
     # 检查必须包含“班级”列
     if "班级" not in df.columns:
-        st.error("文件必须包含「班级」列。")
+        st.error("数据必须包含「班级」列。")
         st.stop()
 
     # 判断是否有“学校”列
@@ -120,10 +158,9 @@ if uploaded_file is not None:
         st.error("处理后无有效数据，请检查成绩列。")
         st.stop()
 
-    # ---------- 提取选定班级数据 + 班级内排名（重写）----------
+    # ---------- 提取选定班级数据 + 班级内排名 ----------
     st.header("📥 提取选定班级数据")
 
-    # 筛选班级原始数据
     if has_school:
         class_raw_df = df[(df["学校"] == selected_school) & (df["班级"] == selected_class)].copy()
     else:
@@ -131,34 +168,27 @@ if uploaded_file is not None:
 
     st.caption(f"已筛选到 {len(class_raw_df)} 条记录")
 
-    # 定义需要保留的列：学校（若有）、班级、姓名 + 所选学科
     base_cols = ["班级", "姓名"]
     if has_school:
         base_cols = ["学校"] + base_cols
     keep_cols = base_cols + selected_subjects
-    # 确保这些列都存在
     keep_cols = [c for c in keep_cols if c in class_raw_df.columns]
     class_display = class_raw_df[keep_cols].copy()
 
-    # 转换学科列为数值，并计算排名
     for subj in selected_subjects:
         class_display[subj] = pd.to_numeric(class_display[subj], errors="coerce")
 
-    # ---------- 排名功能 ----------
     st.subheader("📊 班级内成绩排名")
     sort_subject = st.selectbox("选择排序依据学科", selected_subjects, key="rank_sort")
 
-    # 计算排名并放在第一列
     rank_col_name = f"{sort_subject}排名"
     class_display[rank_col_name] = class_display[sort_subject].rank(ascending=False, method="min").astype("Int64")
 
-    # 调整列顺序：排名列 -> 基础列 -> 学科列
     final_cols = [rank_col_name] + base_cols + selected_subjects
     final_display = class_display[final_cols]
 
     st.dataframe(final_display, use_container_width=True)
 
-    # 下载排名表
     csv_rank = final_display.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
         label="下载班级内排名表 (CSV)",
@@ -168,7 +198,6 @@ if uploaded_file is not None:
         key="download_rank"
     )
 
-    # 原始数据下载（保留原始完整列）
     csv_raw = class_raw_df.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
         label="下载该班级原始数据 (CSV)",
@@ -286,4 +315,7 @@ if uploaded_file is not None:
             st.plotly_chart(fig, use_container_width=True)
 
 else:
-    st.info("👆 请上传一个 Excel 文件开始分析。")
+    if input_method == "📁 上传 Excel 文件":
+        st.info("👆 请上传一个 Excel 文件开始分析。")
+    else:
+        st.info("👆 请粘贴表格数据并设置分隔符开始分析。")
