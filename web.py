@@ -123,6 +123,28 @@ if uploaded_file is not None:
         st.error("处理后无有效数据，请检查成绩列。")
         st.stop()
 
+    # ---------- 提取选定班级原始数据（新增模块） ----------
+    st.header("📥 提取选定班级数据")
+
+    # 根据有无学校列筛选原始 df
+    if has_school:
+        class_raw_df = df[(df["学校"] == selected_school) & (df["班级"] == selected_class)]
+    else:
+        class_raw_df = df[df["班级"] == selected_class]
+
+    st.caption(f"已筛选到 {len(class_raw_df)} 条记录")
+    st.dataframe(class_raw_df, use_container_width=True)
+
+    # 提供下载
+    csv_raw = class_raw_df.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        label="下载该班级原始数据 (CSV)",
+        data=csv_raw,
+        file_name=f"{selected_class}_原始数据.csv",
+        mime="text/csv",
+        key="download_raw"
+    )
+
     # ---------- 统计分析（表格输出） ----------
     st.header("📋 班级对比统计表")
 
@@ -229,7 +251,7 @@ if uploaded_file is not None:
 
             fig.update_layout(
                 xaxis=dict(range=[0, 100], dtick=20),
-                height=800,
+                height=600,
                 legend_title="分组",
             )
             st.plotly_chart(fig, use_container_width=True)
