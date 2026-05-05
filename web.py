@@ -70,14 +70,13 @@ if uploaded_file is not None:
             st.stop()
         selected_class = st.selectbox("选择班级", classes)
     else:
-        # 无学校列：直接从所有班级中选择
         selected_school = None
         classes = sorted(df["班级"].dropna().unique())
         if not classes:
             st.error("未找到任何班级数据。")
             st.stop()
         selected_class = st.selectbox("选择班级", classes)
-        school_df = df.copy()  # 用于一致性
+        school_df = df.copy()
 
     # ---------- 选择学科（成绩列） ----------
     exclude_keywords = ["准考证号", "姓名", "学校", "班级", "名次", "校次", "联考"]
@@ -94,7 +93,7 @@ if uploaded_file is not None:
         st.warning("请至少选择一列成绩进行分析。")
         st.stop()
 
-    # ---------- 分析范围（仅在有学校时显示选项） ----------
+    # ---------- 分析范围 ----------
     if has_school:
         scope = st.radio(
             "分析范围",
@@ -102,9 +101,8 @@ if uploaded_file is not None:
             help="「所有学校」将整个数据集分组为“学校+班级”；「仅本校」分组为“班级”",
         )
     else:
-        scope = "仅本校"  # 相当于只能按班级
+        scope = "仅本校"
 
-    # 准备分析数据并定义分组
     if scope == "所有学校" and has_school:
         analysis_df = df.copy()
         analysis_df["分组"] = analysis_df["学校"] + " " + analysis_df["班级"].astype(str)
@@ -114,7 +112,6 @@ if uploaded_file is not None:
         analysis_df["分组"] = analysis_df["班级"].astype(str)
         target_group = selected_class
 
-    # 成绩列转数值
     for col in selected_subjects:
         analysis_df[col] = pd.to_numeric(analysis_df[col], errors="coerce")
 
@@ -123,19 +120,55 @@ if uploaded_file is not None:
         st.error("处理后无有效数据，请检查成绩列。")
         st.stop()
 
-    # ---------- 提取选定班级数据 + 班级内排名 ----------
+    # ---------- 提取选定班级数据 + 班级内排名（重写）----------
     st.header("📥 提取选定班级数据")
 
-    # 根据有无学校列筛选原始 df
+    # 筛选班级原始数据
     if has_school:
         class_raw_df = df[(df["学校"] == selected_school) & (df["班级"] == selected_class)].copy()
     else:
         class_raw_df = df[df["班级"] == selected_class].copy()
 
     st.caption(f"已筛选到 {len(class_raw_df)} 条记录")
-    st.dataframe(class_raw_df, use_container_width=True)
 
-    # 下载原始数据
+    # 定义需要保留的列：学校（若有）、班级、姓名 + 所选学科
+    base_cols = ["班级", "姓名"]
+    if has_school:
+        base_cols = ["学校"] + base_cols
+    keep_cols = base_cols + selected_subjects
+    # 确保这些列都存在
+    keep_cols = [c for c in keep_cols if c in class_raw_df.columns]
+    class_display = class_raw_df[keep_cols].copy()
+
+    # 转换学科列为数值，并计算排名
+    for subj in selected_subjects:
+        class_display[subj] = pd.to_numeric(class_display[subj], errors="coerce")
+
+    # ---------- 排名功能 ----------
+    st.subheader("📊 班级内成绩排名")
+    sort_subject = st.selectbox("选择排序依据学科", selected_subjects, key="rank_sort")
+
+    # 计算排名并放在第一列
+    rank_col_name = f"{sort_subject}排名"
+    class_display[rank_col_name] = class_display[sort_subject].rank(ascending=False, method="min").astype("Int64")
+
+    # 调整列顺序：排名列 -> 基础列 -> 学科列
+    final_cols = [rank_col_name] + base_cols + selected_subjects
+    final_display = class_display[final_cols]
+
+    st.dataframe(final_display, use_container_width=True)
+
+    # 下载排名表
+    csv_rank = final_display.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        label="下载班级内排名表 (CSV)",
+        data=csv_rank,
+        file_name=f"{selected_class}_班级排名.csv",
+        mime="text/csv",
+        key="download_rank"
+    )
+
+    # 原始数据下载（保留原始完整列）
     csv_raw = class_raw_df.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
         label="下载该班级原始数据 (CSV)",
@@ -143,31 +176,6 @@ if uploaded_file is not None:
         file_name=f"{selected_class}_原始数据.csv",
         mime="text/csv",
         key="download_raw"
-    )
-
-    # ---------- 新增：班级内排名分析 ----------
-    st.subheader("📊 班级内成绩排名")
-    # 复制一份用于排名，同时保留关键信息列（姓名、准考证号等）
-    rank_df = class_raw_df.copy()
-    # 将所选学科转换为数值
-    for subj in selected_subjects:
-        rank_df[subj] = pd.to_numeric(rank_df[subj], errors="coerce")
-        # 计算班级内排名（降序，分数越高排名越靠前）
-        rank_col = f"{subj}_班级排名"
-        rank_df[rank_col] = rank_df[subj].rank(ascending=False, method="min").astype("Int64")  # Int64 可空整数
-    # 选择展示的列：原所有列 + 新增排名列（按学科顺序插入好一些）
-    display_cols = list(class_raw_df.columns) + [f"{subj}_班级排名" for subj in selected_subjects]
-    rank_df_display = rank_df[display_cols]
-    st.dataframe(rank_df_display, use_container_width=True)
-
-    # 下载排名表
-    csv_rank = rank_df_display.to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        label="下载班级内排名表 (CSV)",
-        data=csv_rank,
-        file_name=f"{selected_class}_班级排名.csv",
-        mime="text/csv",
-        key="download_rank"
     )
 
     # ---------- 统计分析（表格输出） ----------
@@ -187,8 +195,6 @@ if uploaded_file is not None:
             .reset_index()
         )
         stats["均值排名"] = stats["均值"].rank(ascending=False, method="min").astype(int)
-
-        # 目标班级排在最前
         stats["is_target"] = stats["分组"] == target_group
         stats = stats.sort_values(["is_target", "均值排名"], ascending=[False, True]).drop(
             columns="is_target"
@@ -242,7 +248,6 @@ if uploaded_file is not None:
                 title=f"{subject} - 各班级内部百分位分布",
             )
 
-            # 各分组趋势线
             for group in all_groups:
                 group_data = temp_df[temp_df["分组"] == group].sort_values("百分位")
                 if len(group_data) >= 3:
@@ -258,7 +263,6 @@ if uploaded_file is not None:
                         showlegend=False
                     ))
 
-            # 整体趋势线
             if len(temp_df) >= 4:
                 x_vals = temp_df["百分位"].values
                 y_vals = temp_df[subject].values
