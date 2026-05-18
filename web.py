@@ -4,12 +4,21 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.colors as pcolors
-from io import StringIO
+from io import StringIO, BytesIO
+
 
 st.set_page_config(page_title="考试成绩分析", layout="wide")
 st.title("📊 考试成绩分析工具 (by Licht)")
 
-# ---------- 示例表格格式 ----------
+
+def to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1") -> bytes:
+    """将 DataFrame 转换为 XLSX 文件的字节数据"""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+    return output.getvalue()
+
+
 with st.expander("📋 查看示例数据格式"):
     example_data = pd.DataFrame({
         "学校": ["学校A", "学校A", "学校A", "学校B", "学校B"],
@@ -23,7 +32,7 @@ with st.expander("📋 查看示例数据格式"):
     st.dataframe(example_data, use_container_width=True)
     st.caption("上传的 Excel 文件或粘贴的数据需包含「班级」列以及各学科成绩列；「学校」列可选，若无则仅按班级分析。")
 
-# ---------- 数据输入方式选择 ----------
+
 input_method = st.radio("选择数据输入方式", ["📁 上传 Excel 文件", "📋 粘贴表格数据"])
 
 df_source = None
@@ -50,7 +59,7 @@ if input_method == "📁 上传 Excel 文件":
             st.error(f"读取 Sheet 失败：{e}")
             st.stop()
 
-        # 校验基本条件
+       
         if df_source.empty:
             st.error("所选 Sheet 为空。")
             st.stop()
@@ -60,7 +69,7 @@ elif input_method == "📋 粘贴表格数据":
     sep_option = st.selectbox("分隔符", ["自动检测", "制表符（Tab）", "逗号（,）", "空格"])
 
     if pasted_text:
-        # 解析分隔符
+        
         sep_map = {
             "制表符（Tab）": "\t",
             "逗号（,）": ",",
@@ -70,7 +79,7 @@ elif input_method == "📋 粘贴表格数据":
         sep = sep_map[sep_option]
 
         try:
-            # 若自动检测，让 pandas 推断分隔符
+           
             if sep is None:
                 df_source = pd.read_csv(StringIO(pasted_text), sep=None, engine="python", dtype=str)
             else:
@@ -83,7 +92,7 @@ elif input_method == "📋 粘贴表格数据":
             st.error("粘贴的数据为空，请重新输入。")
             st.stop()
 
-# ---------- 如果数据已加载，执行后续分析 ----------
+
 if df_source is not None:
     # 通用预处理
     df = df_source.copy()
@@ -185,25 +194,28 @@ if df_source is not None:
     class_display[rank_col_name] = class_display[sort_subject].rank(ascending=False, method="min").astype("Int64")
 
     final_cols = [rank_col_name] + base_cols + selected_subjects
-    final_display = class_display[final_cols]
+    # 按排名列升序排序（第一名在前）
+    final_display = class_display[final_cols].sort_values(rank_col_name)
 
     st.dataframe(final_display, use_container_width=True)
 
-    csv_rank = final_display.to_csv(index=False).encode("utf-8-sig")
+    # 下载班级排名表（XLSX，已排序）
+    xlsx_rank = to_excel_bytes(final_display)
     st.download_button(
-        label="下载班级内排名表 (CSV)",
-        data=csv_rank,
-        file_name=f"{selected_class}_班级排名.csv",
-        mime="text/csv",
+        label="下载班级内排名表 (XLSX)",
+        data=xlsx_rank,
+        file_name=f"{selected_class}_班级排名.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="download_rank"
     )
 
-    csv_raw = class_raw_df.to_csv(index=False).encode("utf-8-sig")
+    # 下载班级原始数据（XLSX，保持原始顺序）
+    xlsx_raw = to_excel_bytes(class_raw_df)
     st.download_button(
-        label="下载该班级原始数据 (CSV)",
-        data=csv_raw,
-        file_name=f"{selected_class}_原始数据.csv",
-        mime="text/csv",
+        label="下载该班级原始数据 (XLSX)",
+        data=xlsx_raw,
+        file_name=f"{selected_class}_原始数据.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="download_raw"
     )
 
@@ -240,12 +252,13 @@ if df_source is not None:
 
         st.dataframe(styled_stats, use_container_width=True)
 
-        csv = stats.to_csv(index=False).encode("utf-8-sig")
+        # 下载统计表（XLSX）
+        xlsx_stats = to_excel_bytes(stats)
         st.download_button(
             f"下载 {subject} 统计表",
-            data=csv,
-            file_name=f"{subject}_统计表.csv",
-            mime="text/csv",
+            data=xlsx_stats,
+            file_name=f"{subject}_统计表.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
     # ---------- 可视化 ----------
